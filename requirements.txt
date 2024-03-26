@@ -10,3 +10,8 @@ sktime==0.16.1
 sympy==1.11.1
 torch==1.7.1
 tqdm==4.64.1
+fastdtw==0.3.4
+futures==3.0.5
+gensim==4.3.1
+six==1.16.0
+smart-open==6.3.0

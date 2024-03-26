@@ -122,17 +122,9 @@ class M4Summary:
             return len(np.where(self.test_set.groups == group_name)[0])
 
         weighted_score = {}
-        for g in ['Yearly', 'Quarterly', 'Monthly']:
+        for g in ['Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Daily', 'Hourly']:
             weighted_score[g] = scores[g] * group_count(g)
             scores_summary[g] = scores[g]
-
-        others_score = 0
-        others_count = 0
-        for g in ['Weekly', 'Daily', 'Hourly']:
-            others_score += scores[g] * group_count(g)
-            others_count += group_count(g)
-        weighted_score['Others'] = others_score
-        scores_summary['Others'] = others_score / others_count
 
         average = np.sum(list(weighted_score.values())) / len(self.test_set.groups)
         scores_summary['Average'] = average

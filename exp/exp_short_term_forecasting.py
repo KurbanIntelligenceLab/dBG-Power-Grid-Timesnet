@@ -1,21 +1,25 @@
-from data_provider.data_factory import data_provider
-from data_provider.m4 import M4Meta
-from exp.exp_basic import Exp_Basic
-from utils.tools import EarlyStopping, adjust_learning_rate, visual
-from utils.losses import mape_loss, mase_loss, smape_loss
-from utils.m4_summary import M4Summary
+import os
+import pickle
+import time
+import warnings
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas
 import torch
 import torch.nn as nn
 from torch import optim
-import os
-import time
-import warnings
-import numpy as np
-import pandas
+
+from data_provider.data_factory import data_provider
+from data_provider.m4 import M4Meta
+from exp.exp_basic import Exp_Basic
+from utils.losses import mape_loss, mase_loss, smape_loss
+from utils.m4_summary import M4Summary
+from utils.tools import EarlyStopping, adjust_learning_rate, visual
 
 warnings.filterwarnings('ignore')
 
-
+conter = 0
 class Exp_Short_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Short_Term_Forecast, self).__init__(args)
@@ -157,7 +161,14 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         self.model.train()
         return loss
 
-    def test(self, setting, test=0):
+    def test(self, setting, test=0, seasons=None):
+        global conter
+
+        kernels = self.model.model[0].conv[0].kernels
+        parsed_weights = [weights.weight.detach().numpy() for weights in kernels]
+        # np.savez("weights.npz", *parsed_weights)
+        np.savez(f"dataset/weights/weights_project_{seasons}.npz",self.model.projection.weight.detach().numpy())
+
         _, train_loader = self._get_data(flag='train')
         _, test_loader = self._get_data(flag='test')
         x, _ = train_loader.dataset.last_insample_window()
@@ -203,9 +214,10 @@ class Exp_Short_Term_Forecast(Exp_Basic):
                 visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
         print('test shape:', preds.shape)
+        dbg = 'dBG_' if self.args.dBG else ''
 
         # result save
-        folder_path = './m4_results/' + self.args.model + '/'
+        folder_path = './m4_results/' + dbg + self.args.model + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
@@ -216,7 +228,7 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         forecasts_df.to_csv(folder_path + self.args.seasonal_patterns + '_forecast.csv')
 
         print(self.args.model)
-        file_path = './m4_results/' + self.args.model + '/'
+        file_path = './m4_results/' + dbg + self.args.model + '/'
         if 'Weekly_forecast.csv' in os.listdir(file_path) \
                 and 'Monthly_forecast.csv' in os.listdir(file_path) \
                 and 'Yearly_forecast.csv' in os.listdir(file_path) \
@@ -226,10 +238,19 @@ class Exp_Short_Term_Forecast(Exp_Basic):
             m4_summary = M4Summary(file_path, self.args.root_path)
             # m4_forecast.set_index(m4_winner_forecast.columns[0], inplace=True)
             smape_results, owa_results, mape, mase = m4_summary.evaluate()
-            print('smape:', smape_results)
-            print('mape:', mape)
-            print('mase:', mase)
-            print('owa:', owa_results)
+
+            folder_path = './error_rates/'
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+            print(f'smape: {smape_results}\n')
+            print(f'mape: {mape}\n')
+            print(f'mase: {mase}\n')
+            print(f'owa: {owa_results}\n')
+            with open(folder_path + dbg + self.args.model + '.txt', 'w') as file:
+                file.write(f'smape: {smape_results}\n')
+                file.write(f'mape: {mape}\n')
+                file.write(f'mase: {mase}\n')
+                file.write(f'owa: {owa_results}\n')
         else:
             print('After all 6 tasks are finished, you can calculate the averaged index')
         return

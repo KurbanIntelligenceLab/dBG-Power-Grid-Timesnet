@@ -1,8 +1,15 @@
+import ctypes
+import math
+
+import joblib
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.utils import weight_norm
-import math
+from scipy.interpolate import interp1d
+from scipy.spatial import distance
+from torch import dropout
+
+import dBG.utils.IterationUtils as Iter
 
 
 class PositionalEmbedding(nn.Module):
@@ -40,6 +47,153 @@ class TokenEmbedding(nn.Module):
     def forward(self, x):
         x = self.tokenConv(x.permute(0, 2, 1)).transpose(1, 2)
         return x
+
+
+def to_c_array(py_list):
+    return (ctypes.c_int * len(py_list))(*py_list)
+
+
+def load_features(season):
+    features = set()
+    with open(f'dataset/features/15k/{season}_features.txt', 'r') as file:
+        for line in file:
+            tuple_elements = tuple(map(int, line.strip("()\n").split(", ")))
+            features.add(tuple_elements)
+    return set(list(features)[:15])
+
+
+def interpolate(list_a, list_b):
+    max_length = max(len(list_a), len(list_b))
+    x_new = np.linspace(0, 1, max_length)
+
+    # Interpolate list_a if it is shorter, else interpolate list_b
+    if len(list_a) < len(list_b):
+        x = np.linspace(0, 1, len(list_a))
+        f = interp1d(x, list_a, kind='linear')
+        return f(x_new).astype(int), list_b
+    elif len(list_b) < len(list_a):
+        x = np.linspace(0, 1, len(list_b))
+        f = interp1d(x, list_b, kind='linear')
+        return list_a, f(x_new).astype(int)
+    else:
+        # If both lists are of equal length, return them as is
+        return list_a, list_b
+
+
+class dBGraphEmbedding(nn.Module):
+    def __init__(self, c_in, d_model, season, seq_len, pred_len):
+        super(dBGraphEmbedding, self).__init__()
+        self.features = load_features(season)
+        self.graph_embedding = dict()
+        self.k = 3
+        self.window_count = seq_len - self.k + 2
+        with open(f'/run/media/lumpus/HDD Storage/PycharmProjects/Time-Series-Library/dataset/graph_emb/{season}.emb',
+                  'r') as file:
+            # Read the first line to get dimensions
+            first_line = file.readline()
+            dimensions = [int(dim) for dim in first_line.split()]
+
+            # Read the rest of the data line by line
+            for line in file:
+                data = [float(num) for num in line.split()]
+                key = data[0]  # First column is the key
+                value = data[1:dimensions[1] + 1]  # Rest of the columns are the values
+                self.graph_embedding[key] = torch.tensor(value)
+        self.node_mapping = joblib.load(
+            f'/run/media/lumpus/HDD Storage/PycharmProjects/Time-Series-Library/dataset/Graphs/{season}_nodes.joblib')
+
+        if not all(len(key) == self.k - 1 for key in self.node_mapping.keys()):
+            raise Exception("Unmatching tuple size")
+
+        self.desc = joblib.load(f'dataset/Discretizer/20Disc/{season}_discretizer_model.joblib')
+
+    def forward(self, x):
+        shape = x.shape
+        discretized_data = self.desc.transform(x.reshape(-1, 1)).astype(int)
+        discretized_data = torch.tensor(discretized_data.reshape(shape), dtype=torch.int32)
+        x_enc_out = torch.zeros(x.shape[0], x.shape[1] - self.k + 2, 32)
+        for i, sequence in enumerate(discretized_data.squeeze(-1)):
+            for j, current in enumerate(Iter.sliding_window(sequence, self.k - 1)):
+                node_key = tuple([int(k) for k in current])
+                if node_key in self.node_mapping:
+                    node_id = self.node_mapping[node_key]
+                else:
+                    closest_node_key = min(self.node_mapping.keys(), key=lambda x: distance.euclidean(x, node_key))
+                    self.node_mapping[node_key] = self.node_mapping[closest_node_key]
+                    node_id = self.node_mapping[node_key]
+                x_enc_out[i, j] = self.graph_embedding[node_id]
+        x_enc_out = torch.nn.functional.pad(x_enc_out, (0, 0, 0, x.shape[1] - self.window_count))
+        return x_enc_out
+
+
+class dBGEmbedding(nn.Module):
+    def __init__(self, c_in, d_model, season, seq_len, dropout=0.1):
+        super(dBGEmbedding, self).__init__()
+
+        self.features = load_features(season)
+
+        # Loading external C library for Levenshtein distance
+        self.levenshtein = ctypes.CDLL(
+            '/run/media/lumpus/HDD Storage/PycharmProjects/Time-Series-Library/levenshtein.so')
+        self.levenshtein.levenshtein_distance.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int,
+                                                          ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        self.levenshtein.levenshtein_distance.restype = ctypes.c_int
+
+        padding = 1 if torch.__version__ >= '1.5.0' else 2
+
+        # Define your network layers
+        self.conv = nn.Conv1d(in_channels=c_in, out_channels=d_model,
+                              kernel_size=3, padding=padding, padding_mode='circular', bias=False)
+
+        self.dropout = nn.Dropout(p=dropout)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(
+                    m.weight, mode='fan_in', nonlinearity='leaky_relu')
+
+        self.desc = joblib.load(f'dataset/Discretizer/15Disc/{season}_discretizer_model.joblib')
+
+    def forward(self, x):
+        shape = x.shape
+        discretized_data = self.desc.transform(x.reshape(-1, 1)).astype(int)
+        discretized_data = torch.tensor(discretized_data.reshape(shape), dtype=torch.int32)
+
+        # Vectorizing the computation of embeddings
+        dbg_feats = self.compute_embeddings(discretized_data)
+
+        # Normalization
+        means = dbg_feats.mean(1, keepdim=True)
+        stdev = torch.sqrt(torch.var(dbg_feats, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        dbg_feats = (dbg_feats - means) / stdev
+        # dbg_feats = torch.cat((corr_feats, dbg_feats), dim=2) # 16, 15, 2
+        x = self.conv(dbg_feats.permute(0, 2, 1))  # 16, 16, 2
+        return self.dropout(x)
+
+    def compute_embeddings(self, discretized_data):
+        # corr_embeds = []
+        dist_embeds = []
+        for row in discretized_data.permute(0, 2, 1):
+            # corr_embed = self.calculate_row_corr_embeddings(row[0])
+            dist_embed = self.calculate_row_dist_embeddings(row[0])
+            # corr_embeds.append(corr_embed)
+            dist_embeds.append(dist_embed)
+        return torch.tensor(dist_embeds).unsqueeze(-1)
+
+    def calculate_row_corr_embeddings(self, row):
+        row_embeds = list()
+        for feature in self.features:
+            feat_i, row_i = interpolate(feature, row)
+            corr = np.corrcoef(feat_i, row_i)[0, 1]
+            row_embeds.append(float(0 if np.isnan(corr) else corr))
+        return row_embeds
+
+    def calculate_row_dist_embeddings(self, row):
+        row_str = to_c_array(row.tolist())
+        row_embeds = [
+            float(self.levenshtein.levenshtein_distance(row_str, len(row_str), to_c_array(list(feature)), len(feature)))
+            for feature in self.features]
+        return row_embeds
 
 
 class FixedEmbedding(nn.Module):
@@ -111,7 +265,7 @@ class DataEmbedding(nn.Module):
         super(DataEmbedding, self).__init__()
 
         self.value_embedding = TokenEmbedding(c_in=c_in, d_model=d_model)
-        self.position_embedding = PositionalEmbedding(d_model=d_model)
+        # self.position_embedding = PositionalEmbedding(d_model=d_model)
         self.temporal_embedding = TemporalEmbedding(d_model=d_model, embed_type=embed_type,
                                                     freq=freq) if embed_type != 'timeF' else TimeFeatureEmbedding(
             d_model=d_model, embed_type=embed_type, freq=freq)
@@ -119,7 +273,7 @@ class DataEmbedding(nn.Module):
 
     def forward(self, x, x_mark):
         if x_mark is None:
-            x = self.value_embedding(x) + self.position_embedding(x)
+            x = self.value_embedding(x)
         else:
             x = self.value_embedding(
                 x) + self.temporal_embedding(x_mark) + self.position_embedding(x)
