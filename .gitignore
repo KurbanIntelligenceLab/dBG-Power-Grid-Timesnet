@@ -157,3 +157,14 @@ data_loader_all.py
 /scripts/imputation/tmp/
 /utils/self_tools.py
 /scripts/exp_scripts/
+
+#dBG
+/compiled_results/
+/.vscode/
+/dataset
+/error_rates/
+/logs/
+/checkpoints/*
+process_results.py
+struc2vec-master/pickles/*
+dbglogsum.py

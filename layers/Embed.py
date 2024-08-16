@@ -49,18 +49,61 @@ class TokenEmbedding(nn.Module):
         return x
 
 
+class dBGraphEmbedding(nn.Module):
+    def __init__(self, c_in, d_model, season, seq_len, pred_len, k, ap, disc, dBGEmb):
+        super(dBGraphEmbedding, self).__init__()
+        self.graph_embedding = dict()
+        self.k = k
+        self.window_count = seq_len - self.k + 2
+        self.dBGEmb = dBGEmb
+        graph_id = f"k{k}_disc{disc}_ap{ap}"
+        with open(f'dataset/Graphs/{graph_id}/graph_emb_{dBGEmb}/{season}_emb.txt','r') as file:
+            # Read the first line to get dimensions
+            first_line = file.readline()
+            dimensions = [int(dim) for dim in first_line.split()]
+
+            # Read the rest of the data line by line
+            for line in file:
+                data = [float(num) for num in line.split()]
+                key = data[0]  # First column is the key
+                value = data[1:dimensions[1] + 1]  # Rest of the columns are the values
+                self.graph_embedding[key] = torch.tensor(value)
+        self.node_mapping = joblib.load(f'dataset/Graphs/{graph_id}/{season}_nodes.joblib')
+
+        if not all(len(key) == self.k - 1 for key in self.node_mapping.keys()):
+            raise Exception("Unmatching tuple size")
+
+        self.desc = joblib.load(f'dataset/Discretizer/{disc}Disc/{season}_discretizer_model.joblib')
+
+    def forward(self, x):
+        shape = x.shape
+        discretized_data = self.desc.transform(x.reshape(-1, 1).cpu()).astype(int)
+        discretized_data = torch.tensor(discretized_data.reshape(shape), dtype=torch.int32)
+        x_enc_out = torch.zeros(x.shape[0], x.shape[1] - self.k + 2, self.dBGEmb)
+        for i, sequence in enumerate(discretized_data.squeeze(-1)):
+            for j, current in enumerate(Iter.sliding_window(sequence, self.k - 1)):
+                node_key = tuple([int(k) for k in current])
+                if node_key in self.node_mapping:
+                    node_id = self.node_mapping[node_key]
+                else:
+                    closest_node_key = min(self.node_mapping.keys(), key=lambda x: distance.euclidean(x, node_key))
+                    self.node_mapping[node_key] = self.node_mapping[closest_node_key]
+                    node_id = self.node_mapping[node_key]
+                x_enc_out[i, j] = self.graph_embedding[node_id]
+        x_enc_out = torch.nn.functional.pad(x_enc_out, (0, 0, 0, x.shape[1] - self.window_count))
+        return x_enc_out.to(x.device)
+
 def to_c_array(py_list):
     return (ctypes.c_int * len(py_list))(*py_list)
 
 
-def load_features(season):
+def load_features(season, graph_id, feat_count):
     features = set()
-    with open(f'dataset/features/15k/{season}_features.txt', 'r') as file:
+    with open(f'dataset/Graphs/{graph_id}/proto_features_{feat_count}/{season}_features.txt', 'r') as file:
         for line in file:
             tuple_elements = tuple(map(int, line.strip("()\n").split(", ")))
             features.add(tuple_elements)
-    return set(list(features)[:15])
-
+    return features
 
 def interpolate(list_a, list_b):
     max_length = max(len(list_a), len(list_b))
@@ -80,61 +123,15 @@ def interpolate(list_a, list_b):
         return list_a, list_b
 
 
-class dBGraphEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, season, seq_len, pred_len):
-        super(dBGraphEmbedding, self).__init__()
-        self.features = load_features(season)
-        self.graph_embedding = dict()
-        self.k = 3
-        self.window_count = seq_len - self.k + 2
-        with open(f'/run/media/lumpus/HDD Storage/PycharmProjects/Time-Series-Library/dataset/graph_emb/{season}.emb',
-                  'r') as file:
-            # Read the first line to get dimensions
-            first_line = file.readline()
-            dimensions = [int(dim) for dim in first_line.split()]
-
-            # Read the rest of the data line by line
-            for line in file:
-                data = [float(num) for num in line.split()]
-                key = data[0]  # First column is the key
-                value = data[1:dimensions[1] + 1]  # Rest of the columns are the values
-                self.graph_embedding[key] = torch.tensor(value)
-        self.node_mapping = joblib.load(
-            f'/run/media/lumpus/HDD Storage/PycharmProjects/Time-Series-Library/dataset/Graphs/{season}_nodes.joblib')
-
-        if not all(len(key) == self.k - 1 for key in self.node_mapping.keys()):
-            raise Exception("Unmatching tuple size")
-
-        self.desc = joblib.load(f'dataset/Discretizer/20Disc/{season}_discretizer_model.joblib')
-
-    def forward(self, x):
-        shape = x.shape
-        discretized_data = self.desc.transform(x.reshape(-1, 1)).astype(int)
-        discretized_data = torch.tensor(discretized_data.reshape(shape), dtype=torch.int32)
-        x_enc_out = torch.zeros(x.shape[0], x.shape[1] - self.k + 2, 32)
-        for i, sequence in enumerate(discretized_data.squeeze(-1)):
-            for j, current in enumerate(Iter.sliding_window(sequence, self.k - 1)):
-                node_key = tuple([int(k) for k in current])
-                if node_key in self.node_mapping:
-                    node_id = self.node_mapping[node_key]
-                else:
-                    closest_node_key = min(self.node_mapping.keys(), key=lambda x: distance.euclidean(x, node_key))
-                    self.node_mapping[node_key] = self.node_mapping[closest_node_key]
-                    node_id = self.node_mapping[node_key]
-                x_enc_out[i, j] = self.graph_embedding[node_id]
-        x_enc_out = torch.nn.functional.pad(x_enc_out, (0, 0, 0, x.shape[1] - self.window_count))
-        return x_enc_out
-
-
 class dBGEmbedding(nn.Module):
-    def __init__(self, c_in, d_model, season, seq_len, dropout=0.1):
+    def __init__(self, c_in, d_model, season, seq_len, k, ap, disc, feat_cnt, dropout=0.1, include_corr=False, lin_layer=False):
         super(dBGEmbedding, self).__init__()
+        graph_id = f"k{k}_disc{disc}_ap{ap}"
 
-        self.features = load_features(season)
-
+        self.features = load_features(season, graph_id, feat_cnt)
+        self.include_corr = include_corr
         # Loading external C library for Levenshtein distance
-        self.levenshtein = ctypes.CDLL(
-            '/run/media/lumpus/HDD Storage/PycharmProjects/Time-Series-Library/levenshtein.so')
+        self.levenshtein = ctypes.CDLL('./levenshtein.so')
         self.levenshtein.levenshtein_distance.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int,
                                                           ctypes.POINTER(ctypes.c_int), ctypes.c_int]
         self.levenshtein.levenshtein_distance.restype = ctypes.c_int
@@ -142,43 +139,59 @@ class dBGEmbedding(nn.Module):
         padding = 1 if torch.__version__ >= '1.5.0' else 2
 
         # Define your network layers
-        self.conv = nn.Conv1d(in_channels=c_in, out_channels=d_model,
+        self.conv = nn.Conv1d(in_channels=c_in + include_corr, out_channels=d_model,
                               kernel_size=3, padding=padding, padding_mode='circular', bias=False)
 
         self.dropout = nn.Dropout(p=dropout)
 
+        if lin_layer:
+            self.lin_layer = nn.Linear(d_model, d_model)
+            self.dropout_lin = nn.Dropout(p=dropout)
+        else:
+            self.lin_layer = None
+            
         for m in self.modules():
             if isinstance(m, nn.Conv1d):
                 nn.init.kaiming_normal_(
                     m.weight, mode='fan_in', nonlinearity='leaky_relu')
 
-        self.desc = joblib.load(f'dataset/Discretizer/15Disc/{season}_discretizer_model.joblib')
+        self.desc = joblib.load(f'dataset/Discretizer/{disc}Disc/{season}_discretizer_model.joblib')
 
     def forward(self, x):
         shape = x.shape
-        discretized_data = self.desc.transform(x.reshape(-1, 1)).astype(int)
+        discretized_data = self.desc.transform(x.cpu().reshape(-1, 1)).astype(int)
         discretized_data = torch.tensor(discretized_data.reshape(shape), dtype=torch.int32)
 
         # Vectorizing the computation of embeddings
-        dbg_feats = self.compute_embeddings(discretized_data)
+        dbg_feats, corr_feats = self.compute_embeddings(discretized_data, self.include_corr)
 
         # Normalization
         means = dbg_feats.mean(1, keepdim=True)
         stdev = torch.sqrt(torch.var(dbg_feats, dim=1, keepdim=True, unbiased=False) + 1e-5)
         dbg_feats = (dbg_feats - means) / stdev
-        # dbg_feats = torch.cat((corr_feats, dbg_feats), dim=2) # 16, 15, 2
-        x = self.conv(dbg_feats.permute(0, 2, 1))  # 16, 16, 2
-        return self.dropout(x)
 
-    def compute_embeddings(self, discretized_data):
-        # corr_embeds = []
+        if self.include_corr:
+            dbg_feats = torch.cat((corr_feats, dbg_feats), dim=2)
+            
+        x = self.conv(dbg_feats.permute(0, 2, 1).to(x.device))
+
+        if self.lin_layer is not None:
+            x = self.lin_layer(x.permute(0, 2, 1))
+            x = self.dropout_lin(x).permute(0, 2, 1)
+        
+        return self.dropout(x).permute(0, 2, 1)
+
+    def compute_embeddings(self, discretized_data, include_corr=False):
+        corr_embeds = [] if include_corr else None
         dist_embeds = []
         for row in discretized_data.permute(0, 2, 1):
-            # corr_embed = self.calculate_row_corr_embeddings(row[0])
+            if include_corr:
+                corr_embed = self.calculate_row_corr_embeddings(row[0])
+                corr_embeds.append(corr_embed)
             dist_embed = self.calculate_row_dist_embeddings(row[0])
-            # corr_embeds.append(corr_embed)
             dist_embeds.append(dist_embed)
-        return torch.tensor(dist_embeds).unsqueeze(-1)
+        return torch.tensor(dist_embeds).unsqueeze(-1), torch.tensor(corr_embeds).unsqueeze(-1) if include_corr else None
+
 
     def calculate_row_corr_embeddings(self, row):
         row_embeds = list()

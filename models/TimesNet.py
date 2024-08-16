@@ -2,9 +2,8 @@ import torch
 import torch.fft
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 from layers.Conv_Blocks import Inception_Block_V1
-from layers.Embed import DataEmbedding, dBGraphEmbedding, PositionalEmbedding
+from layers.Embed import DataEmbedding, dBGraphEmbedding, PositionalEmbedding, dBGEmbedding
 import numpy as np
 
 def FFT_for_Period(x, k=2):
@@ -27,10 +26,10 @@ class TimesBlock(nn.Module):
         self.k = configs.top_k
         # parameter-efficient design
         self.conv = nn.Sequential(
-            Inception_Block_V1(configs.d_model + 32 , configs.d_ff,
+            Inception_Block_V1(configs.d_model + configs.dBGEmbDim , configs.d_ff,
                                num_kernels=configs.num_kernels),
             nn.GELU(),
-            Inception_Block_V1(configs.d_ff, configs.d_model + 32 ,
+            Inception_Block_V1(configs.d_ff, configs.d_model + configs.dBGEmbDim ,
                                num_kernels=configs.num_kernels)
         )
 
@@ -81,25 +80,32 @@ class Model(nn.Module):
         self.seq_len = configs.seq_len
         self.label_len = configs.label_len
         self.pred_len = configs.pred_len
-        self.model = nn.ModuleList([TimesBlock(configs) for _ in range(configs.e_layers)])
-        self.enc_embedding = DataEmbedding(configs.enc_in, configs.d_model, configs.embed, configs.freq,
-                                           configs.dropout)
+        configs.dBGEmbDim = 0
+        self.enc_embedding = DataEmbedding(configs.enc_in, configs.d_model, configs.embed, configs.freq, configs.dropout)
+        self.position_embedding = PositionalEmbedding(d_model=configs.d_model)
         self.layer = configs.e_layers
-        self.layer_norm = nn.LayerNorm(configs.d_model + 32 )
+        self.dBG_config = configs.dBG
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            if configs.dBG:
-                # self.dBG = dBGEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len)
-                self.dBG = dBGraphEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len,
-                                            self.pred_len)
-                # Adjust the dimension for linear layer after concatenating dbg_out and enc_out
-                self.predict_linear = nn.Linear(self.seq_len, self.pred_len + self.seq_len)
-                self.projection = self.projection = nn.Linear(configs.d_model + 32 , configs.c_out, bias=True)
-                self.position_embedding = PositionalEmbedding(d_model=configs.d_model)
-
+            if self.dBG_config:
+                if self.dBG_config == 'graph_emb':
+                    configs.dBGEmbDim = configs.dBGEmb
+                    self.predict_linear = nn.Linear(self.seq_len, self.pred_len + self.seq_len)
+                    self.dBG = dBGraphEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len,
+                                            self.pred_len, configs.k, configs.ap, configs.disc, configs.dBGEmb)
+                elif self.dBG_config == 'append' or self.dBG_config == 'append_linear' or self.dBG_config == 'bypass':
+                    if self.dBG_config == 'append' or self.dBG_config == 'append_linear':
+                        self.predict_linear = nn.Linear(self.seq_len + configs.proto_feat, self.pred_len + self.seq_len)
+                    else:
+                        self.predict_linear = nn.Linear(self.seq_len, self.pred_len + self.seq_len)
+                    self.dBG = dBGEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len, 
+                                                configs.k, configs.ap, configs.disc, configs.proto_feat, 
+                                                include_corr=configs.include_corr, 
+                                                lin_layer=self.dBG_config == 'append_linear' or self.dBG_config == 'bypass')
+                else:
+                    raise ValueError(f'Unknown value for dBG: {self.dBG_config}.')
             else:
                 self.dBG = None
                 self.predict_linear = nn.Linear(self.seq_len, self.pred_len + self.seq_len)
-                self.projection = nn.Linear(configs.d_model, configs.c_out, bias=True)
         if self.task_name == 'imputation' or self.task_name == 'anomaly_detection':
             self.projection = nn.Linear(
                 configs.d_model, configs.c_out, bias=True)
@@ -108,6 +114,10 @@ class Model(nn.Module):
             self.dropout = nn.Dropout(configs.dropout)
             self.projection = nn.Linear(
                 configs.d_model * configs.seq_len, configs.num_class)
+        
+        self.model = nn.ModuleList([TimesBlock(configs) for _ in range(configs.e_layers)])
+        self.layer_norm = nn.LayerNorm(configs.d_model + configs.dBGEmbDim)
+        self.projection = nn.Linear(configs.d_model + configs.dBGEmbDim , configs.c_out, bias=True)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
         # Normalization from Non-stationary Transformer
@@ -117,13 +127,13 @@ class Model(nn.Module):
         x_enc_normalized = x_enc_normalized / stdev
 
         # embedding
-        enc_out = self.enc_embedding(x_enc_normalized, x_mark_enc)  # [B,T,C] (16,16,32)
+        enc_out = self.enc_embedding(x_enc_normalized, x_mark_enc)  # [B,T,C] 
         enc_out += self.position_embedding(enc_out)
 
-        if self.dBG is not None:
+        if self.dBG is not None:    
             dbg_enc = self.dBG(x_enc)
-            enc_out = torch.cat((dbg_enc, enc_out), dim=-1)
-            plt.figure(figsize=(10, 8))
+            if self.dBG_config != 'bypass':
+                enc_out = torch.cat((dbg_enc, enc_out), dim=(-1 if self.dBG_config == 'graph_emb' else 1))
 
         enc_out = self.predict_linear(enc_out.permute(0, 2, 1)).permute(0, 2, 1)  # align temporal dimension
 
@@ -131,11 +141,15 @@ class Model(nn.Module):
         for i in range(self.layer):
             enc_out = self.layer_norm(self.model[i](enc_out))
 
+        dbgf = 0
+        if self.dBG_config == 'bypass':
+                _, dbgf, _ = dbg_enc.shape
+                enc_out = torch.cat((dbg_enc, enc_out), dim=(1))
+
         dec_out = self.projection(enc_out)
         # De-Normalization from Non-stationary Transformer
-        dec_out = dec_out * (
-            stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len + self.seq_len, 1))  # 16 56 1 ||| 16 24 1
-        dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len + self.seq_len, 1))
+        dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len + self.seq_len + dbgf, 1)) 
+        dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len + self.seq_len + dbgf, 1))
         return dec_out
 
     def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):

@@ -2,6 +2,7 @@ import os
 import pickle
 import time
 import warnings
+import csv
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -162,19 +163,13 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         return loss
 
     def test(self, setting, test=0, seasons=None):
-        global conter
-
-        kernels = self.model.model[0].conv[0].kernels
-        parsed_weights = [weights.weight.detach().numpy() for weights in kernels]
-        # np.savez("weights.npz", *parsed_weights)
-        np.savez(f"dataset/weights/weights_project_{seasons}.npz",self.model.projection.weight.detach().numpy())
-
+        global conter       
         _, train_loader = self._get_data(flag='train')
         _, test_loader = self._get_data(flag='test')
         x, _ = train_loader.dataset.last_insample_window()
         y = test_loader.dataset.timeseries
         x = torch.tensor(x, dtype=torch.float32).to(self.device)
-        x = x.unsqueeze(-1)
+        x = x.unsqueeze(-1) 
 
         if test:
             print('loading model')
@@ -214,10 +209,9 @@ class Exp_Short_Term_Forecast(Exp_Basic):
                 visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
         print('test shape:', preds.shape)
-        dbg = 'dBG_' if self.args.dBG else ''
 
         # result save
-        folder_path = './m4_results/' + dbg + self.args.model + '/'
+        folder_path = './m4_results/' + self.args.model + '_' + self.args.tag + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
@@ -228,7 +222,7 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         forecasts_df.to_csv(folder_path + self.args.seasonal_patterns + '_forecast.csv')
 
         print(self.args.model)
-        file_path = './m4_results/' + dbg + self.args.model + '/'
+        file_path = './m4_results/' + self.args.model + '_' + self.args.tag + '/'
         if 'Weekly_forecast.csv' in os.listdir(file_path) \
                 and 'Monthly_forecast.csv' in os.listdir(file_path) \
                 and 'Yearly_forecast.csv' in os.listdir(file_path) \
@@ -246,11 +240,25 @@ class Exp_Short_Term_Forecast(Exp_Basic):
             print(f'mape: {mape}\n')
             print(f'mase: {mase}\n')
             print(f'owa: {owa_results}\n')
-            with open(folder_path + dbg + self.args.model + '.txt', 'w') as file:
-                file.write(f'smape: {smape_results}\n')
-                file.write(f'mape: {mape}\n')
-                file.write(f'mase: {mase}\n')
-                file.write(f'owa: {owa_results}\n')
+            
+            metrics = {
+                'smape': smape_results,
+                'mape': mape,
+                'mase': mase,
+                'owa': owa_results
+            }
+
+            error_rates_path = folder_path + self.args.model + '_' + self.args.tag + '.csv'
+            with open(error_rates_path, 'w', newline='') as file:
+                csv_writer = csv.writer(file)
+
+                header = ['Metric', 'Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Daily', 'Hourly', 'Average']
+                csv_writer.writerow(header)
+                
+                for metric, values in metrics.items():
+                    row = [metric] + [values.get(freq) for freq in header[1:]]  # Construct row dynamically
+                    csv_writer.writerow(row) 
+
         else:
             print('After all 6 tasks are finished, you can calculate the averaged index')
         return

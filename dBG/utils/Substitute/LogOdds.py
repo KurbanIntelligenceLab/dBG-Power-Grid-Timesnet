@@ -61,8 +61,7 @@ class LogOdds:
         self.similarity_matrix = np.log2(self.similarity_matrix / expected_matrix) / self.scale
         self.min = self.similarity_matrix.min()
         del self.sequences
-        print(self.similarity_matrix)
-
+    
     def get_score(self, letter1, letter2):
         if letter1 == self.gap_char or letter2 == self.gap_char:
             return None

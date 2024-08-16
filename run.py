@@ -37,6 +37,7 @@ if __name__ == '__main__':
     parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
     parser.add_argument('--model', type=str, required=True, default='Autoformer',
                         help='model name, options: [Autoformer, Transformer, TimesNet]')
+    parser.add_argument('--tag', type=str, default='', help='ID of the current experiment')
 
     # data loader
     parser.add_argument('--data', type=str, required=True, default='ETTm1', help='dataset type')
@@ -81,7 +82,6 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
     parser.add_argument('--embed', type=str, default='timeF',
                         help='time features encoding, options:[timeF, fixed, learned]')
-    parser.add_argument('--dBG', type=str2bool, default=True, help='Enable dBG')
     parser.add_argument('--activation', type=str, default='gelu', help='activation')
     parser.add_argument('--output_attention', action='store_true', help='whether to output attention in ecoder')
     parser.add_argument('--channel_independence', type=int, default=0,
@@ -108,6 +108,15 @@ if __name__ == '__main__':
     parser.add_argument('--p_hidden_dims', type=int, nargs='+', default=[128, 128],
                         help='hidden layer dimensions of projector (List)')
     parser.add_argument('--p_hidden_layers', type=int, default=2, help='number of hidden layers in projector')
+
+    #dBG
+    parser.add_argument('--dBG', type=str, default=None, help='Enable dBG')
+    parser.add_argument('--k', type=int, default=3, help='k parameter for dBG')
+    parser.add_argument('--ap', type=str2bool, default=True, help='is the dBG substituted')
+    parser.add_argument('--disc', type=int, default=20, help='alphabet size for dBG')
+    parser.add_argument('--dBGEmb', type=int, default=32, help='encoding dims for the dBG')
+    parser.add_argument('--proto_feat', type=int, default=16, help='number of proto features')
+    parser.add_argument('--include_corr', type=str2bool, default=False, help='include corrolation')
 
 
     args = parser.parse_args()
@@ -139,8 +148,14 @@ if __name__ == '__main__':
         for ii in range(args.itr):
             # setting record of experiments
             exp = Exp(args)  # set experiments
-            setting = 'dBG_{}_{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
+            setting = 'dBG_{}_k{}_ap{}_disc{}_gemb{}_pf{}_c{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
                 args.dBG,
+                args.k,
+                args.ap,
+                args.disc,
+                args.dBGEmb,
+                args.proto_feat,
+                args.include_corr,
                 args.task_name,
                 args.model_id,
                 args.model,
@@ -167,8 +182,14 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
     else:
         ii = 0
-        setting = 'dBG_{}_{}_{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
+        setting = 'dBG_{}_k{}_ap{}_disc{}_gemb{}_pf{}_c{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}'.format(
             args.dBG,
+            args.k,
+            args.ap,
+            args.disc,
+            args.dBGEmb,
+            args.proto_feat,
+            args.include_corr,
             args.task_name,
             args.model_id,
             args.model,
