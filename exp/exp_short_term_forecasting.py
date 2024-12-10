@@ -10,6 +10,7 @@ import pandas
 import torch
 import torch.nn as nn
 from torch import optim
+from tqdm import tqdm
 
 from data_provider.data_factory import data_provider
 from data_provider.m4 import M4Meta
@@ -147,7 +148,7 @@ class Exp_Short_Term_Forecast(Exp_Basic):
             outputs = torch.zeros((B, self.args.pred_len, C)).float()  # .to(self.device)
             id_list = np.arange(0, B, 500)  # validation set size
             id_list = np.append(id_list, B)
-            for i in range(len(id_list) - 1):
+            for i in tqdm(range(len(id_list) - 1)):
                 outputs[id_list[i]:id_list[i + 1], :, :] = self.model(x[id_list[i]:id_list[i + 1]], None,
                                                                       dec_inp[id_list[i]:id_list[i + 1]],
                                                                       None).detach().cpu()
@@ -223,15 +224,10 @@ class Exp_Short_Term_Forecast(Exp_Basic):
 
         print(self.args.model)
         file_path = './m4_results/' + self.args.model + '_' + self.args.tag + '/'
-        if 'Weekly_forecast.csv' in os.listdir(file_path) \
-                and 'Monthly_forecast.csv' in os.listdir(file_path) \
-                and 'Yearly_forecast.csv' in os.listdir(file_path) \
-                and 'Daily_forecast.csv' in os.listdir(file_path) \
-                and 'Hourly_forecast.csv' in os.listdir(file_path) \
-                and 'Quarterly_forecast.csv' in os.listdir(file_path):
+        if 'MW_forecast.csv' in os.listdir(file_path):
             m4_summary = M4Summary(file_path, self.args.root_path)
             # m4_forecast.set_index(m4_winner_forecast.columns[0], inplace=True)
-            smape_results, owa_results, mape, mase = m4_summary.evaluate()
+            smape_results, mape, mase = m4_summary.evaluate()
 
             folder_path = './error_rates/'
             if not os.path.exists(folder_path):
@@ -239,26 +235,4 @@ class Exp_Short_Term_Forecast(Exp_Basic):
             print(f'smape: {smape_results}\n')
             print(f'mape: {mape}\n')
             print(f'mase: {mase}\n')
-            print(f'owa: {owa_results}\n')
-            
-            metrics = {
-                'smape': smape_results,
-                'mape': mape,
-                'mase': mase,
-                'owa': owa_results
-            }
-
-            error_rates_path = folder_path + self.args.model + '_' + self.args.tag + '.csv'
-            with open(error_rates_path, 'w', newline='') as file:
-                csv_writer = csv.writer(file)
-
-                header = ['Metric', 'Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Daily', 'Hourly', 'Average']
-                csv_writer.writerow(header)
-                
-                for metric, values in metrics.items():
-                    row = [metric] + [values.get(freq) for freq in header[1:]]  # Construct row dynamically
-                    csv_writer.writerow(row) 
-
-        else:
-            print('After all 6 tasks are finished, you can calculate the averaged index')
         return

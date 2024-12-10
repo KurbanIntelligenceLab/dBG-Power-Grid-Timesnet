@@ -168,3 +168,5 @@ data_loader_all.py
 process_results.py
 struc2vec-master/pickles/*
 dbglogsum.py
+random_walks.txt
+struc2vec.log

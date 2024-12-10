@@ -57,7 +57,7 @@ class dBGraphEmbedding(nn.Module):
         self.window_count = seq_len - self.k + 2
         self.dBGEmb = dBGEmb
         graph_id = f"k{k}_disc{disc}_ap{ap}"
-        with open(f'dataset/Graphs/{graph_id}/graph_emb_{dBGEmb}/{season}_emb.txt','r') as file:
+        with open(f'dataset/MW/Graphs/{graph_id}/graph_emb_{dBGEmb}/{season}_emb.txt','r') as file:
             # Read the first line to get dimensions
             first_line = file.readline()
             dimensions = [int(dim) for dim in first_line.split()]
@@ -68,12 +68,12 @@ class dBGraphEmbedding(nn.Module):
                 key = data[0]  # First column is the key
                 value = data[1:dimensions[1] + 1]  # Rest of the columns are the values
                 self.graph_embedding[key] = torch.tensor(value)
-        self.node_mapping = joblib.load(f'dataset/Graphs/{graph_id}/{season}_nodes.joblib')
+        self.node_mapping = joblib.load(f'dataset/MW/Graphs/{graph_id}/{season}_nodes.joblib')
 
         if not all(len(key) == self.k - 1 for key in self.node_mapping.keys()):
             raise Exception("Unmatching tuple size")
 
-        self.desc = joblib.load(f'dataset/Discretizer/{disc}Disc/{season}_discretizer_model.joblib')
+        self.desc = joblib.load(f'dataset/MW/Discretizer/{disc}Disc/{season}_discretizer_model.joblib')
 
     def forward(self, x):
         shape = x.shape

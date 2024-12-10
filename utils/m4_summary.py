@@ -61,22 +61,15 @@ class M4Summary:
         :param forecast: Forecasts. Shape: timeseries, time.
         :return: sMAPE and OWA grouped by seasonal patterns.
         """
-        grouped_owa = OrderedDict()
-
-        naive2_forecasts = pd.read_csv(self.naive_path).values[:, 1:].astype(np.float32)
-        naive2_forecasts = np.array([v[~np.isnan(v)] for v in naive2_forecasts])
-
         model_mases = {}
-        naive2_smapes = {}
-        naive2_mases = {}
         grouped_smapes = {}
         grouped_mapes = {}
+
         for group_name in M4Meta.seasonal_patterns:
             file_name = self.file_path + group_name + "_forecast.csv"
             if os.path.exists(file_name):
                 model_forecast = pd.read_csv(file_name).values
 
-            naive2_forecast = group_values(naive2_forecasts, self.test_set.groups, group_name)
             target = group_values(self.test_set.values, self.test_set.groups, group_name)
             # all timeseries within group have same frequency
             frequency = self.training_set.frequencies[self.test_set.groups == group_name][0]
@@ -86,29 +79,18 @@ class M4Summary:
                                                     insample=insample[i],
                                                     outsample=target[i],
                                                     frequency=frequency) for i in range(len(model_forecast))])
-            naive2_mases[group_name] = np.mean([mase(forecast=naive2_forecast[i],
-                                                     insample=insample[i],
-                                                     outsample=target[i],
-                                                     frequency=frequency) for i in range(len(model_forecast))])
 
-            naive2_smapes[group_name] = np.mean(smape_2(naive2_forecast, target))
             grouped_smapes[group_name] = np.mean(smape_2(forecast=model_forecast, target=target))
             grouped_mapes[group_name] = np.mean(mape(forecast=model_forecast, target=target))
 
         grouped_smapes = self.summarize_groups(grouped_smapes)
         grouped_mapes = self.summarize_groups(grouped_mapes)
         grouped_model_mases = self.summarize_groups(model_mases)
-        grouped_naive2_smapes = self.summarize_groups(naive2_smapes)
-        grouped_naive2_mases = self.summarize_groups(naive2_mases)
-        for k in grouped_model_mases.keys():
-            grouped_owa[k] = (grouped_model_mases[k] / grouped_naive2_mases[k] +
-                              grouped_smapes[k] / grouped_naive2_smapes[k]) / 2
 
         def round_all(d):
             return dict(map(lambda kv: (kv[0], np.round(kv[1], 3)), d.items()))
 
-        return round_all(grouped_smapes), round_all(grouped_owa), round_all(grouped_mapes), round_all(
-            grouped_model_mases)
+        return round_all(grouped_smapes), round_all(grouped_mapes), round_all(grouped_model_mases)
 
     def summarize_groups(self, scores):
         """
@@ -122,7 +104,7 @@ class M4Summary:
             return len(np.where(self.test_set.groups == group_name)[0])
 
         weighted_score = {}
-        for g in ['Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Daily', 'Hourly']:
+        for g in ['MW']:
             weighted_score[g] = scores[g] * group_count(g)
             scores_summary[g] = scores[g]
 

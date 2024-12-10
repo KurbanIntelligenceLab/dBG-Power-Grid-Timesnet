@@ -79,15 +79,15 @@ class M4Dataset:
     values: np.ndarray
 
     @staticmethod
-    def load(training: bool = True, dataset_file: str = '../dataset/m4') -> 'M4Dataset':
+    def load(training: bool = True, dataset_file: str = '../dataset/m4', training_file='training.npy', test_file='test.npy') -> 'M4Dataset':
         """
         Load cached dataset.
 
         :param training: Load training part if training is True, test part otherwise.
         """
         info_file = os.path.join(dataset_file, 'M4-info.csv')
-        train_cache_file = os.path.join(dataset_file, 'training.npz')
-        test_cache_file = os.path.join(dataset_file, 'test.npz')
+        train_cache_file = os.path.join(dataset_file, training_file)
+        test_cache_file = os.path.join(dataset_file, test_file)
         m4_info = pd.read_csv(info_file)
         return M4Dataset(ids=m4_info.M4id.values,
                          groups=m4_info.SP.values,
@@ -100,16 +100,17 @@ class M4Dataset:
 
 @dataclass()
 class M4Meta:
-    seasonal_patterns = ['Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Daily', 'Hourly']
-    horizons = [6, 8, 18, 13, 14, 48]
-    frequencies = [1, 4, 12, 1, 1, 24]
+    seasonal_patterns = ['MW'] # ['Yearly', 'Quarterly', 'Monthly', 'Weekly', 'Daily', 'Hourly']
+    horizons = [6, 8, 18, 13, 14, 48, 10]
+    frequencies = [1, 4, 12, 1, 1, 24, 1]
     horizons_map = {
         'Yearly': 6,
         'Quarterly': 8,
         'Monthly': 18,
         'Weekly': 13,
         'Daily': 14,
-        'Hourly': 48
+        'Hourly': 48,
+        'MW': 1440
     }  # different predict length
     frequency_map = {
         'Yearly': 1,
@@ -117,7 +118,8 @@ class M4Meta:
         'Monthly': 12,
         'Weekly': 1,
         'Daily': 1,
-        'Hourly': 24
+        'Hourly': 24,
+        'MW': 1
     }
     history_size = {
         'Yearly': 1.5,
@@ -125,7 +127,8 @@ class M4Meta:
         'Monthly': 1.5,
         'Weekly': 10,
         'Daily': 10,
-        'Hourly': 10
+        'Hourly': 10,
+        'MW': 1
     }  # from interpretable.gin
 
 
