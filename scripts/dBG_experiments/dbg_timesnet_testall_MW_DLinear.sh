@@ -1,6 +1,6 @@
 #!/bin/bash
 
-model_name=TimesNet
+model_name=DLinear
 approximate=True
 arch=graph_emb
 k_params=(5 6)
@@ -28,17 +28,16 @@ run_experiment() {
       --enc_in 1 \
       --dec_in 1 \
       --c_out 1 \
-      --pred_len $horizon \
       --batch_size 16 \
       --d_model 512 \
-      --d_ff 32 \
-      --top_k 5 \
       --des 'Exp' \
       --itr 1 \
       --learning_rate 0.001 \
       --loss 'SMAPE' \
+      --pred_len $horizon \
       --dBG $arch \
       --k $k_param \
+      --ap $approximate \
       --disc $disc \
       --ap $approximate \
       --dBGEmb $dbgdim \

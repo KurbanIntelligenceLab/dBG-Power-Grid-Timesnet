@@ -80,7 +80,10 @@ def data_provider(args, flag):
             target=args.target,
             timeenc=timeenc,
             freq=freq,
-            seasonal_patterns=args.seasonal_patterns
+            seasonal_patterns=args.seasonal_patterns,
+            test_file=f'{args.pred_len}_test.npy',
+            train_file=f'{args.pred_len}_training.npy',
+            info_file=f'{args.pred_len}_M4-info.csv'
         )
         print(flag, len(data_set))
         data_loader = DataLoader(

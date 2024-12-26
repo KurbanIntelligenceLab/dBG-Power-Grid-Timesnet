@@ -295,7 +295,7 @@ class Dataset_M4(Dataset):
     def __init__(self, root_path, flag='pred', size=None,
                  features='S', data_path='ETTh1.csv',
                  target='OT', scale=False, inverse=False, timeenc=0, freq='15min',
-                 seasonal_patterns='Yearly'):
+                 seasonal_patterns='Yearly', test_file='test.npy', train_file='train.npy', info_file='M4_info.csv'):
         # size [seq_len, label_len, pred_len]
         # init
         self.features = features
@@ -309,6 +309,10 @@ class Dataset_M4(Dataset):
         self.label_len = size[1]
         self.pred_len = size[2]
 
+        self.test_file = test_file
+        self.train_file = train_file
+        self.info_file = info_file
+
         self.seasonal_patterns = seasonal_patterns
         self.history_size = M4Meta.history_size[seasonal_patterns]
         self.window_sampling_limit = int(self.history_size * self.pred_len)
@@ -319,9 +323,17 @@ class Dataset_M4(Dataset):
     def __read_data__(self):
         # M4Dataset.initialize()
         if self.flag == 'train':
-            dataset = M4Dataset.load(training=True, dataset_file=self.root_path)
+            dataset = M4Dataset.load(training=True,
+                                     dataset_file=self.root_path,
+                                     training_file=self.train_file,
+                                     test_file=self.test_file,
+                                     info_file=self.info_file)
         else:
-            dataset = M4Dataset.load(training=False, dataset_file=self.root_path)
+            dataset = M4Dataset.load(training=False,
+                                     dataset_file=self.root_path,
+                                     training_file=self.train_file,
+                                     test_file=self.test_file,
+                                     info_file=self.info_file)
         training_values = np.array(
             [v[~np.isnan(v)] for v in
              dataset.values[dataset.groups == self.seasonal_patterns]])  # split different frequencies

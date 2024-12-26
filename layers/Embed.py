@@ -56,7 +56,7 @@ class dBGraphEmbedding(nn.Module):
         self.k = k
         self.window_count = seq_len - self.k + 2
         self.dBGEmb = dBGEmb
-        graph_id = f"k{k}_disc{disc}_ap{ap}"
+        graph_id = f"k{k}_disc{disc}_ap{ap}_horizon{pred_len}"
         with open(f'dataset/MW/Graphs/{graph_id}/graph_emb_{dBGEmb}/{season}_emb.txt','r') as file:
             # Read the first line to get dimensions
             first_line = file.readline()
@@ -73,7 +73,7 @@ class dBGraphEmbedding(nn.Module):
         if not all(len(key) == self.k - 1 for key in self.node_mapping.keys()):
             raise Exception("Unmatching tuple size")
 
-        self.desc = joblib.load(f'dataset/MW/Discretizer/{disc}Disc/{season}_discretizer_model.joblib')
+        self.desc = joblib.load(f'dataset/MW/Discretizer/Horizon_{pred_len}/{disc}Disc/{season}_discretizer_model.joblib')
 
     def forward(self, x):
         shape = x.shape

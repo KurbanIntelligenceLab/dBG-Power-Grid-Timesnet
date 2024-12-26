@@ -29,6 +29,14 @@ def group_values(values, groups, group_name):
     return np.array([v[~np.isnan(v)] for v in values[groups == group_name]])
 
 
+def MAE(pred, true):
+    return np.mean(np.abs(pred - true))
+
+
+def MSE(pred, true):
+    return np.mean((pred - true) ** 2)
+
+
 def mase(forecast, insample, outsample, frequency):
     return np.mean(np.abs(forecast - outsample)) / np.mean(np.abs(insample[:-frequency] - insample[frequency:]))
 
@@ -48,10 +56,18 @@ def mape(forecast, target):
 
 
 class M4Summary:
-    def __init__(self, file_path, root_path):
+    def __init__(self, file_path, root_path, args):
         self.file_path = file_path
-        self.training_set = M4Dataset.load(training=True, dataset_file=root_path)
-        self.test_set = M4Dataset.load(training=False, dataset_file=root_path)
+        self.training_set = M4Dataset.load(training=True,
+                                           dataset_file=root_path,
+                                           test_file=f'{args.pred_len}_test.npy',
+                                           training_file=f'{args.pred_len}_training.npy',
+                                           info_file=f'{args.pred_len}_M4-info.csv')
+        self.test_set = M4Dataset.load(training=False,
+                                       dataset_file=root_path,
+                                       test_file=f'{args.pred_len}_test.npy',
+                                       training_file=f'{args.pred_len}_training.npy',
+                                       info_file=f'{args.pred_len}_M4-info.csv')
         self.naive_path = os.path.join(root_path, 'submission-Naive2.csv')
 
     def evaluate(self):
@@ -64,6 +80,8 @@ class M4Summary:
         model_mases = {}
         grouped_smapes = {}
         grouped_mapes = {}
+        grouped_mae = {}
+        grouped_mse = {}
 
         for group_name in M4Meta.seasonal_patterns:
             file_name = self.file_path + group_name + "_forecast.csv"
@@ -82,15 +100,23 @@ class M4Summary:
 
             grouped_smapes[group_name] = np.mean(smape_2(forecast=model_forecast, target=target))
             grouped_mapes[group_name] = np.mean(mape(forecast=model_forecast, target=target))
+            grouped_mae[group_name] = np.mean(MAE(pred=model_forecast, true=target))
+            grouped_mse[group_name] = np.mean(MSE(pred=model_forecast, true=target))
 
         grouped_smapes = self.summarize_groups(grouped_smapes)
         grouped_mapes = self.summarize_groups(grouped_mapes)
         grouped_model_mases = self.summarize_groups(model_mases)
+        grouped_mae = self.summarize_groups(grouped_mae)
+        grouped_mse = self.summarize_groups(grouped_mse)
 
         def round_all(d):
             return dict(map(lambda kv: (kv[0], np.round(kv[1], 3)), d.items()))
 
-        return round_all(grouped_smapes), round_all(grouped_mapes), round_all(grouped_model_mases)
+        return (round_all(grouped_smapes),
+                round_all(grouped_mapes),
+                round_all(grouped_model_mases),
+                round_all(grouped_mse),
+                round_all(grouped_mae))
 
     def summarize_groups(self, scores):
         """

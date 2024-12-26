@@ -28,7 +28,7 @@ class Exp_Short_Term_Forecast(Exp_Basic):
 
     def _build_model(self):
         if self.args.data == 'm4':
-            self.args.pred_len = M4Meta.horizons_map[self.args.seasonal_patterns]  # Up to M4 config
+            # self.args.pred_len = M4Meta.horizons_map[self.args.seasonal_patterns]  # Up to M4 config
             self.args.seq_len = 2 * self.args.pred_len  # input_len = 2*pred_len
             self.args.label_len = self.args.pred_len
             self.args.frequency_map = M4Meta.frequency_map[self.args.seasonal_patterns]
@@ -225,14 +225,33 @@ class Exp_Short_Term_Forecast(Exp_Basic):
         print(self.args.model)
         file_path = './m4_results/' + self.args.model + '_' + self.args.tag + '/'
         if 'MW_forecast.csv' in os.listdir(file_path):
-            m4_summary = M4Summary(file_path, self.args.root_path)
+            m4_summary = M4Summary(file_path, self.args.root_path, self.args)
             # m4_forecast.set_index(m4_winner_forecast.columns[0], inplace=True)
-            smape_results, mape, mase = m4_summary.evaluate()
+            smape_results, mape, mase, mse, mae = m4_summary.evaluate()
 
             folder_path = './error_rates/'
             if not os.path.exists(folder_path):
                 os.makedirs(folder_path)
-            print(f'smape: {smape_results}\n')
-            print(f'mape: {mape}\n')
-            print(f'mase: {mase}\n')
-        return
+            print(f'smape: {smape_results}')
+            print(f'mape: {mape}')
+            print(f'mase: {mase}')
+            print(f'mse: {mse}')
+            print(f'mae: {mae}')
+            results_dir = f'Metric_Results/{self.args.model}'
+            os.makedirs(results_dir, exist_ok=True)
+            # Collect metrics into a dictionary
+            metrics = {
+            "Metric": ["smape", "mape", "mase", "mse", "mae"],
+            "Average": [smape_results['Average'], mape['Average'], mase['Average'], mse['Average'], mae['Average']],
+            }
+
+            # Save to CSV
+            csv_filename = os.path.join(results_dir, self.args.tag)
+
+            with open(csv_filename, mode="w", newline="") as file:
+                writer = csv.writer(file)
+                writer.writerow(["Metric", "Average"])
+                for i in range(len(metrics["Metric"])):
+                    writer.writerow([metrics["Metric"][i], metrics["Average"][i]])
+
+

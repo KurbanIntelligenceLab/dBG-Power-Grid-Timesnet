@@ -55,6 +55,7 @@ class MIC(nn.Module):
 
         # isometric convolution
         zeros = torch.zeros((x.shape[0], x.shape[1], x.shape[2] - 1), device=self.device)
+        x = x.to(self.device)
         x = torch.cat((zeros, x), dim=-1)
         x = self.drop(self.act(isometric(x)))
         x = self.norm((x + x1).permute(0, 2, 1)).permute(0, 2, 1)

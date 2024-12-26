@@ -79,13 +79,17 @@ class M4Dataset:
     values: np.ndarray
 
     @staticmethod
-    def load(training: bool = True, dataset_file: str = '../dataset/m4', training_file='training.npy', test_file='test.npy') -> 'M4Dataset':
+    def load(training: bool = True,
+             dataset_file: str = '../dataset/m4',
+             training_file='training.npy',
+             test_file='test.npy',
+             info_file='M4-info.csv') -> 'M4Dataset':
         """
         Load cached dataset.
 
         :param training: Load training part if training is True, test part otherwise.
         """
-        info_file = os.path.join(dataset_file, 'M4-info.csv')
+        info_file = os.path.join(dataset_file, info_file)
         train_cache_file = os.path.join(dataset_file, training_file)
         test_cache_file = os.path.join(dataset_file, test_file)
         m4_info = pd.read_csv(info_file)

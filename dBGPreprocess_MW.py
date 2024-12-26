@@ -207,7 +207,7 @@ def generate_and_save_proto_features(pattern, motif_path, motifs, data, motif_co
             file.write(str(feature) + '\n')
 
 
-def parse_data(raw_file_path, test_size=1440):
+def parse_data(raw_file_path, test_size):
     sequences = pd.read_csv(raw_file_path)
     sequences = sequences.loc[:, ~(sequences.isna().any() | (sequences == 0).all())]
 
@@ -216,9 +216,9 @@ def parse_data(raw_file_path, test_size=1440):
     train_sequences = sequences[:-test_size].T
     test_sequences = sequences[-test_size:].T
 
-    train_filepath = os.path.join(os.path.dirname(raw_file_path), 'training.npy')
-    test_filepath = os.path.join(os.path.dirname(raw_file_path), 'test.npy')
-    info_filepath = os.path.join(os.path.dirname(raw_file_path), 'M4-info.csv')
+    train_filepath = os.path.join(os.path.dirname(raw_file_path), f'{test_size}_training.npy')
+    test_filepath = os.path.join(os.path.dirname(raw_file_path), f'{test_size}_test.npy')
+    info_filepath = os.path.join(os.path.dirname(raw_file_path), f'{test_size}_M4-info.csv')
 
     info_data = {
         "M4id": busses,
@@ -235,40 +235,43 @@ def parse_data(raw_file_path, test_size=1440):
 
 
 def main():
-    pattern='MW'
-    k_params = [4, 5, 6]
+    pattern = 'MW'
+    k_params = [5, 6]
     alphabet_params = [15, 20, 25]
     graph_dim_params = [16, 32, 64, 128]
+    horizons = [24, 48, 96, 168]
     approximate = True
-    parse_data('dataset/MW/Cleaned_ACTIVISg2000_load_time_series_MW.csv')
-    for alphabet in alphabet_params:
-        disc_path = f'dataset/MW/Discretizer/{alphabet}Disc'
-        os.makedirs(disc_path, exist_ok=True)
-        for k in k_params:
-            graph_path = f'dataset/MW/Graphs/k{k}_disc{alphabet}_ap{approximate}'
-            os.makedirs(graph_path, exist_ok=True)
-            m4 = M4Dataset.load(training=True,
-                                dataset_file='dataset/MW',
-                                training_file='training.npy',
-                                test_file='test.npy')
-            training_values = [v[~np.isnan(v)] for v in m4.values[m4.groups == pattern]]
-            data = [ts for ts in training_values]
-            discretizer = KBinsDiscretizer(n_bins=alphabet, encode='ordinal', strategy='quantile')
-            data = bin_descretize(data, discretizer)
-            dbg = generate_and_save_graph(pattern=pattern,
-                                          disc_path=disc_path,
-                                          graph_path=graph_path,
-                                          data=data,
-                                          discretizer=discretizer,
-                                          k=k,
-                                          approximate=approximate)
-            for graph_dim in graph_dim_params:
-                emb_path = os.path.join(graph_path, f'graph_emb_{graph_dim}')
-                os.makedirs(emb_path, exist_ok=True)
-                extract_and_save_graph_emb(pattern=pattern,
-                                           graph_path=graph_path,
-                                           emb_path=emb_path,
-                                           graph_dim_size=graph_dim)
+    for test_size in horizons:
+        print(f"processing for forecast horizon(test size): {test_size}")
+        parse_data('dataset/MW/Cleaned_ACTIVISg2000_load_time_series_MW.csv', test_size=test_size)
+        for alphabet in alphabet_params:
+            disc_path = f'dataset/MW/Discretizer/Horizon_{test_size}/{alphabet}Disc'
+            os.makedirs(disc_path, exist_ok=True)
+            for k in k_params:
+                graph_path = f'dataset/MW/Graphs/k{k}_disc{alphabet}_ap{approximate}_horizon{test_size}'
+                os.makedirs(graph_path, exist_ok=True)
+                m4 = M4Dataset.load(training=True,
+                                    dataset_file='dataset/MW',
+                                    training_file=f'{test_size}_training.npy',
+                                    test_file=f'{test_size}_test.npy')
+                training_values = [v[~np.isnan(v)] for v in m4.values[m4.groups == pattern]]
+                data = [ts for ts in training_values]
+                discretizer = KBinsDiscretizer(n_bins=alphabet, encode='ordinal', strategy='quantile')
+                data = bin_descretize(data, discretizer)
+                dbg = generate_and_save_graph(pattern=pattern,
+                                              disc_path=disc_path,
+                                              graph_path=graph_path,
+                                              data=data,
+                                              discretizer=discretizer,
+                                              k=k,
+                                              approximate=approximate)
+                for graph_dim in graph_dim_params:
+                    emb_path = os.path.join(graph_path, f'graph_emb_{graph_dim}')
+                    os.makedirs(emb_path, exist_ok=True)
+                    extract_and_save_graph_emb(pattern=pattern,
+                                               graph_path=graph_path,
+                                               emb_path=emb_path,
+                                               graph_dim_size=graph_dim)
 
 
 if __name__ == "__main__":
