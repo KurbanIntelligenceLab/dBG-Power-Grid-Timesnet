@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from layers.Transformer_EncDec import Encoder, EncoderLayer
 from layers.SelfAttention_Family import FullAttention, AttentionLayer
-from layers.Embed import DataEmbedding_inverted
+from layers.Embed import DataEmbedding_inverted, dBGraphEmbedding
 import numpy as np
 
 
@@ -21,24 +21,30 @@ class Model(nn.Module):
         # Embedding
         self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
                                                     configs.dropout)
+
+        emb_size = configs.d_model + configs.seq_len if configs.dBG else configs.d_model
         # Encoder
         self.encoder = Encoder(
             [
                 EncoderLayer(
                     AttentionLayer(
                         FullAttention(False, configs.factor, attention_dropout=configs.dropout,
-                                      output_attention=configs.output_attention), configs.d_model, configs.n_heads),
-                    configs.d_model,
+                                      output_attention=configs.output_attention), emb_size, configs.n_heads),
+                    emb_size,
                     configs.d_ff,
                     dropout=configs.dropout,
                     activation=configs.activation
                 ) for l in range(configs.e_layers)
             ],
-            norm_layer=torch.nn.LayerNorm(configs.d_model)
+            norm_layer=torch.nn.LayerNorm(emb_size)
         )
         # Decoder
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            self.projection = nn.Linear(configs.d_model, configs.pred_len, bias=True)
+            self.projection = nn.Linear(emb_size, configs.pred_len, bias=True)
+            self.dBG = configs.dBG
+            self.dBGEmb = dBGraphEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len,
+                                           self.pred_len, configs.k, configs.ap, configs.disc, configs.dBGEmb)
+            self.dBGLin = nn.Linear(configs.dBGEmb, 1)
         if self.task_name == 'imputation':
             self.projection = nn.Linear(configs.d_model, configs.seq_len, bias=True)
         if self.task_name == 'anomaly_detection':
@@ -49,6 +55,7 @@ class Model(nn.Module):
             self.projection = nn.Linear(configs.d_model * configs.enc_in, configs.num_class)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+        x_enc_clone = x_enc.clone().detach()
         # Normalization from Non-stationary Transformer
         means = x_enc.mean(1, keepdim=True).detach()
         x_enc = x_enc - means
@@ -59,6 +66,13 @@ class Model(nn.Module):
 
         # Embedding
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
+
+        if self.dBG is not None:
+            dbg_enc = self.dBGEmb(x_enc_clone)
+            dbg_enc = self.dBGLin(dbg_enc)
+            dbg_enc = dbg_enc.permute(0, 2, 1)
+            enc_out = torch.cat((enc_out, dbg_enc), dim=-1)
+
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
 
         dec_out = self.projection(enc_out).permute(0, 2, 1)[:, :, :N]

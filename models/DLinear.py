@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from layers.Autoformer_EncDec import series_decomp
-from layers.Embed import dBGraphEmbedding
+from layers.Embed import dBGraphEmbedding, DataEmbedding, PositionalEmbedding
 
 
 class Model(nn.Module):
@@ -26,9 +26,11 @@ class Model(nn.Module):
         self.individual = individual
         self.channels = configs.enc_in
         self.dBG = configs.dBG
-        self.predict_linear = nn.Linear(configs.dBGEmb + 1, 1)
         self.dBGEmb = dBGraphEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len,
                                     self.pred_len, configs.k, configs.ap, configs.disc, configs.dBGEmb)
+        self.dBGLin = nn.Linear(configs.dBGEmb, 1)
+        self.dBGProject = nn.Linear(configs.seq_len, configs.pred_len)
+        self.pred_lin = nn.Linear(configs.pred_len, configs.pred_len)
         if self.individual:
             self.Linear_Seasonal = nn.ModuleList()
             self.Linear_Trend = nn.ModuleList()
@@ -61,8 +63,11 @@ class Model(nn.Module):
     def encoder(self, x):
         if self.dBG is not None:
             dbg_enc = self.dBGEmb(x)
-            x = torch.cat((dbg_enc, x), dim=-1)
-            x = self.predict_linear(x)
+            dbg_enc = self.dBGLin(dbg_enc)
+            dbg_enc = dbg_enc.permute(0, 2, 1)
+            dbg_enc = self.dBGProject(dbg_enc)
+        else:
+            dbg_enc = 0
 
         seasonal_init, trend_init = self.decompsition(x)
         seasonal_init, trend_init = seasonal_init.permute(
@@ -80,7 +85,8 @@ class Model(nn.Module):
         else:
             seasonal_output = self.Linear_Seasonal(seasonal_init)
             trend_output = self.Linear_Trend(trend_init)
-        x = seasonal_output + trend_output
+        x = seasonal_output + trend_output + dbg_enc
+        x = self.pred_lin(x)
         x = x.permute(0, 2, 1)
         return x # 16 1 168 input
 

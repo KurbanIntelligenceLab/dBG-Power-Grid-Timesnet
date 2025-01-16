@@ -5,6 +5,8 @@ import numpy as np
 from scipy import signal
 from scipy import special as ss
 
+from layers.Embed import dBGraphEmbedding
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
@@ -107,6 +109,13 @@ class Model(nn.Module):
         self.layers = configs.e_layers
         self.enc_in = configs.enc_in
         self.e_layers = configs.e_layers
+
+        self.dBG = configs.dBG
+        self.dBGEmb = dBGraphEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len,
+                                       self.pred_len, configs.k, configs.ap, configs.disc, configs.dBGEmb)
+        self.dBGLin = nn.Linear(configs.dBGEmb, 1)
+        self.dBGProject = nn.Linear(configs.seq_len, configs.pred_len)
+
         # b, s, f means b, f
         self.affine_weight = nn.Parameter(torch.ones(1, 1, configs.enc_in))
         self.affine_bias = nn.Parameter(torch.zeros(1, 1, configs.enc_in))
@@ -132,13 +141,19 @@ class Model(nn.Module):
                 configs.enc_in * configs.seq_len, configs.num_class)
 
     def forecast(self, x_enc, x_mark_enc, x_dec_true, x_mark_dec):
+        if self.dBG is not None:
+            dbg_enc = self.dBGEmb(x_enc)
+            dbg_enc = self.dBGLin(dbg_enc)
+        else:
+            dbg_enc = 0
+
         # Normalization from Non-stationary Transformer
         means = x_enc.mean(1, keepdim=True).detach()
         x_enc = x_enc - means
         stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
         x_enc /= stdev
 
-        x_enc = x_enc * self.affine_weight + self.affine_bias
+        x_enc = x_enc * self.affine_weight + self.affine_bias + dbg_enc
         x_decs = []
         jump_dist = 0
         for i in range(0, len(self.multiscale) * len(self.window_size)):

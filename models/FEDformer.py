@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers.Embed import DataEmbedding
+from layers.Embed import DataEmbedding, dBGraphEmbedding
 from layers.AutoCorrelation import AutoCorrelationLayer
 from layers.FourierCorrelation import FourierBlock, FourierCrossAttention
 from layers.MultiWaveletCorrelation import MultiWaveletCross, MultiWaveletTransform
@@ -29,38 +29,45 @@ class Model(nn.Module):
         self.version = version
         self.mode_select = mode_select
         self.modes = modes
+        emb_size = configs.d_model # configs.d_model + configs.dBGEmb if configs.dBG else configs.d_model
 
         # Decomp
         self.decomp = series_decomp(configs.moving_avg)
         self.enc_embedding = DataEmbedding(configs.enc_in, configs.d_model, configs.embed, configs.freq,
                                            configs.dropout)
-        self.dec_embedding = DataEmbedding(configs.dec_in, configs.d_model, configs.embed, configs.freq,
+        self.dec_embedding = DataEmbedding(configs.dec_in, emb_size, configs.embed, configs.freq,
                                            configs.dropout)
 
+        self.dBG = configs.dBG
+        self.dBGEmb = dBGraphEmbedding(configs.enc_in, configs.d_model, configs.seasonal_patterns, self.seq_len,
+                                   self.pred_len, configs.k, configs.ap, configs.disc, configs.dBGEmb)
+        self.dBGLin = nn.Linear(configs.dBGEmb, configs.d_model)
+        self.dBGProject = nn.Linear(configs.seq_len, configs.seq_len)
+
         if self.version == 'Wavelets':
-            encoder_self_att = MultiWaveletTransform(ich=configs.d_model, L=1, base='legendre')
-            decoder_self_att = MultiWaveletTransform(ich=configs.d_model, L=1, base='legendre')
-            decoder_cross_att = MultiWaveletCross(in_channels=configs.d_model,
-                                                  out_channels=configs.d_model,
+            encoder_self_att = MultiWaveletTransform(ich=emb_size, L=1, base='legendre')
+            decoder_self_att = MultiWaveletTransform(ich=emb_size, L=1, base='legendre')
+            decoder_cross_att = MultiWaveletCross(in_channels=emb_size,
+                                                  out_channels=emb_size,
                                                   seq_len_q=self.seq_len // 2 + self.pred_len,
                                                   seq_len_kv=self.seq_len,
                                                   modes=self.modes,
-                                                  ich=configs.d_model,
+                                                  ich=emb_size,
                                                   base='legendre',
                                                   activation='tanh')
         else:
-            encoder_self_att = FourierBlock(in_channels=configs.d_model,
-                                            out_channels=configs.d_model,
+            encoder_self_att = FourierBlock(in_channels=emb_size,
+                                            out_channels=emb_size,
                                             seq_len=self.seq_len,
                                             modes=self.modes,
                                             mode_select_method=self.mode_select)
-            decoder_self_att = FourierBlock(in_channels=configs.d_model,
-                                            out_channels=configs.d_model,
+            decoder_self_att = FourierBlock(in_channels=emb_size,
+                                            out_channels=emb_size,
                                             seq_len=self.seq_len // 2 + self.pred_len,
                                             modes=self.modes,
                                             mode_select_method=self.mode_select)
-            decoder_cross_att = FourierCrossAttention(in_channels=configs.d_model,
-                                                      out_channels=configs.d_model,
+            decoder_cross_att = FourierCrossAttention(in_channels=emb_size,
+                                                      out_channels=emb_size,
                                                       seq_len_q=self.seq_len // 2 + self.pred_len,
                                                       seq_len_kv=self.seq_len,
                                                       modes=self.modes,
@@ -72,15 +79,15 @@ class Model(nn.Module):
                 EncoderLayer(
                     AutoCorrelationLayer(
                         encoder_self_att,  # instead of multi-head attention in transformer
-                        configs.d_model, configs.n_heads),
-                    configs.d_model,
+                        emb_size, configs.n_heads),
+                    emb_size,
                     configs.d_ff,
                     moving_avg=configs.moving_avg,
                     dropout=configs.dropout,
                     activation=configs.activation
                 ) for l in range(configs.e_layers)
             ],
-            norm_layer=my_Layernorm(configs.d_model)
+            norm_layer=my_Layernorm(emb_size)
         )
         # Decoder
         self.decoder = Decoder(
@@ -88,11 +95,11 @@ class Model(nn.Module):
                 DecoderLayer(
                     AutoCorrelationLayer(
                         decoder_self_att,
-                        configs.d_model, configs.n_heads),
+                        emb_size, configs.n_heads),
                     AutoCorrelationLayer(
                         decoder_cross_att,
-                        configs.d_model, configs.n_heads),
-                    configs.d_model,
+                        emb_size, configs.n_heads),
+                    emb_size,
                     configs.c_out,
                     configs.d_ff,
                     moving_avg=configs.moving_avg,
@@ -101,8 +108,8 @@ class Model(nn.Module):
                 )
                 for l in range(configs.d_layers)
             ],
-            norm_layer=my_Layernorm(configs.d_model),
-            projection=nn.Linear(configs.d_model, configs.c_out, bias=True)
+            norm_layer=my_Layernorm(emb_size),
+            projection=nn.Linear(emb_size, configs.c_out, bias=True)
         )
 
         if self.task_name == 'imputation':
@@ -115,6 +122,8 @@ class Model(nn.Module):
             self.projection = nn.Linear(configs.d_model * configs.seq_len, configs.num_class)
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
+        x_enc_clone = x_enc.clone().detach()
+
         # decomp init
         mean = torch.mean(x_enc, dim=1).unsqueeze(1).repeat(1, self.pred_len, 1)
         seasonal_init, trend_init = self.decomp(x_enc)  # x - moving_avg, moving_avg
@@ -123,13 +132,19 @@ class Model(nn.Module):
         seasonal_init = F.pad(seasonal_init[:, -self.label_len:, :], (0, 0, 0, self.pred_len))
         # enc
         enc_out = self.enc_embedding(x_enc, x_mark_enc)
+
+        if self.dBG is not None:
+            dbg_enc = self.dBGEmb(x_enc_clone)
+            dbg_enc = self.dBGLin(dbg_enc)
+            enc_out = enc_out + dbg_enc
+
         dec_out = self.dec_embedding(seasonal_init, x_mark_dec)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
         # dec
         seasonal_part, trend_part = self.decoder(dec_out, enc_out, x_mask=None, cross_mask=None, trend=trend_init)
         # final
         dec_out = trend_part + seasonal_part
-        return dec_out
+        return dec_out # 16 336 1
 
     def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):
         # enc
