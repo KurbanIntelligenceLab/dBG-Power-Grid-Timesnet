@@ -1,9 +1,10 @@
-# Power Grid Project
-
+# Official Repository for An Extended Frequency-Improved Legendre Memory Model for Enhanced Long-Term Electricity Load Forecasting
 
 ## Setup
 
-Make sure the data is placed under `dataset/MW` directory with a csv format.
+Download the cleaned dataset from: [[Google Drive]](https://drive.google.com/file/d/1OHLoUDPSramOB5hAx8BkW41BfABBPLPO/view?usp=sharing)
+
+Unzip the csv files and make sure the files are placed under `dataset/MW` directory
 
 ### Create and activate a conda environment
 
